@@ -1,0 +1,15 @@
+{
+  "Saturation" : {
+    "scale" : 0.7
+  },
+
+  "BrightnessContrast" : {
+    "brightness" : -10,
+    "contrast" : 4
+  },
+
+  "Exposure" : {
+    "black_level" : 0.006,
+    "exposure" : 0.3
+  }
+}
