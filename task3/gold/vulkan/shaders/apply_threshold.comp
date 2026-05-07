@@ -1,0 +1,25 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+// In-place: data is both read and written
+layout(set = 0, binding = 0) buffer Data {
+    float data[];
+};
+
+layout(set = 0, binding = 1) readonly buffer ThresholdIn {
+    float threshold;
+};
+
+layout(push_constant) uniform PC {
+    uint n_elements;    // number of pixels to process
+};
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= n_elements) return;
+
+    uint idx = gid;
+    float v = data[idx];
+    if (v > threshold) data[idx] = 0.0;
+}

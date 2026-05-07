@@ -1,0 +1,35 @@
+#version 450
+
+layout(local_size_x = 1) in;   // single-thread: scan is tiny (100 bins)
+
+layout(set = 0, binding = 0) readonly buffer Histogram {
+    uint bins[];
+};
+
+// Output: one float — the depth threshold value
+layout(set = 0, binding = 1) buffer ThresholdOut {
+    float threshold;
+};
+
+layout(push_constant) uniform PC {
+    uint  n_bins;           
+    float d_min;
+    float d_max;
+    uint  tail_bins;
+};
+
+void main() {
+    // Find the last non-empty bin, then step back tail_bins bins from the end.
+    // This replicates:
+    //   hist, bins = np.histogram(d, bins=100)
+    //   d[d > bins[len(bins) - tail_bins]] = 0
+    //
+    // np.histogram returns n_bins+1 bin edges. bins[-tail_bins] is the LEFT
+    // edge of the (tail_bins-1)-th bin from the end. We replicate that exactly:
+    //   threshold_bin_index = n_bins - tail_bins + 1
+    //   threshold = d_min + (threshold_bin_index / n_bins) * (d_max - d_min)
+
+    uint  cutoff_idx = n_bins - tail_bins + 1u;
+    float threshold_val = d_min + (float(cutoff_idx) / float(n_bins)) * (d_max - d_min);
+    threshold = threshold_val;
+}

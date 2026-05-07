@@ -10,6 +10,85 @@ import numpy as np
 import logging 
 
 
+import numpy as np
+from pathlib import Path
+import cffi
+
+# ── CFFI interface ────────────────────────────────────────────────────────────
+
+_CDEF = """
+typedef struct vk_noise_ctx vk_noise_ctx_t;
+
+vk_noise_ctx_t *vk_noise_create(const char *spv_dir);
+
+int vk_noise_remove(vk_noise_ctx_t *ctx,
+                    float          *data_mm,
+                    uint32_t        width,
+                    uint32_t        height,
+                    uint32_t        strength);
+
+const char *vk_noise_last_error(vk_noise_ctx_t *ctx);
+
+void vk_noise_destroy(vk_noise_ctx_t *ctx);
+"""
+
+ffi = cffi.FFI()
+ffi.cdef(_CDEF)
+
+# ── Main class ────────────────────────────────────────────────────────────────
+
+class VkNoiseRemover:
+    def __init__(self, spv_dir = str(Path(__file__).parent / "vulkan" / "spv"), lib_path= str(Path(__file__).parent / "vulkan" /"libvk_noise.so")):
+        self._lib = ffi.dlopen(lib_path)
+        spv_dir   = str(Path(spv_dir).resolve())
+        self._ctx = self._lib.vk_noise_create(spv_dir.encode())
+        if self._ctx == ffi.NULL:
+            err = ffi.string(self._lib.vk_noise_last_error(ffi.NULL)).decode()
+            raise RuntimeError(f"vk_noise_create failed: {err}")
+        logging.info("Yay, vulkan loaded!")
+
+    # ── Core method ───────────────────────────────────────────────────────────
+
+    def remove_raw(self, crop_mm, strength):
+        if crop_mm.dtype != np.float32:
+            crop_mm = crop_mm.astype(np.float32)
+
+        if not crop_mm.flags["C_CONTIGUOUS"]:
+            crop_mm = np.ascontiguousarray(crop_mm)
+
+        H, W = crop_mm.shape
+
+        ptr = ffi.cast("float *", ffi.from_buffer(crop_mm))
+
+        ret = self._lib.vk_noise_remove(self._ctx, ptr, W, H, strength)
+        if ret != 0:
+            err = ffi.string(self._lib.vk_noise_last_error(self._ctx)).decode()
+            raise RuntimeError(f"vk_noise_remove failed ({ret}): {err}")
+
+        return crop_mm
+
+    def remove(self, crop_mm, bbox):
+        crop_mm = self.remove_raw(crop_mm, 4)
+        lower_part = crop_mm[crop_mm.shape[0] * 3 // 4:] # second stronger path for feet at 3/4 of frame height
+        crop_mm[crop_mm.shape[0] * 3 // 4:] = self.remove_raw(lower_part, 55)
+        return crop_mm
+
+    def __del__(self):
+        if hasattr(self, "_lib") and hasattr(self, "_ctx"):
+            if self._ctx != ffi.NULL:
+                self._lib.vk_noise_destroy(self._ctx)
+                self._ctx = ffi.NULL
+
+
+_default_remover = None
+def remove_noise_vulkan(crop_mm, bbox):
+    global _default_remover
+
+    if _default_remover is None:
+        _default_remover = VkNoiseRemover()
+
+    return _default_remover.remove(crop_mm, bbox)
+
 
 def get_palette():
     """
@@ -171,7 +250,7 @@ def remove_noise(crop_mm: np.ndarray, bbox: BBox3D) -> np.ndarray:
     return d
 
 
-def colorize(depth_mm: np.ndarray, lut: np.ndarray) -> np.ndarray:
+def colorize(depth_mm, lut):
     """
     Диапазон нормируется per-crop: ближнее=index 0, дальнее=index 255.
     """
@@ -193,7 +272,7 @@ def colorize(depth_mm: np.ndarray, lut: np.ndarray) -> np.ndarray:
 
 
 
-def make_tile(depth_raw, cfg, lut):
+def make_tile(depth_raw, cfg, lut, vulkan):
     """
     uint16 depth map + PersonConfig → BGR tile.
     Возвращает None если crop пустой или весь фон.
@@ -204,7 +283,10 @@ def make_tile(depth_raw, cfg, lut):
     if crop.size == 0 or float(crop.max()) == 0:
         return None
 
-    denoised = remove_noise(crop, cfg.bbox3d)
+    if vulkan:
+        denoised = remove_noise_vulkan(crop, cfg.bbox3d)
+    else:
+        denoised = remove_noise(crop, cfg.bbox3d)
 
     if float(denoised.max()) == 0:
         return None
@@ -315,10 +397,10 @@ def iter_frames(configs):
         if group:
             yield global_idx, group
 
-def process_frame(global_idx, frames, grid_cols, lut):
+def process_frame(global_idx, frames, grid_cols, lut, vulkan):
     tiles, labels = [], []
     for cfg, depth_raw in frames:
-        tile = make_tile(depth_raw, cfg, lut)
+        tile = make_tile(depth_raw, cfg, lut, vulkan)
 
         if tile is not None:
             tiles.append(tile)
@@ -330,10 +412,12 @@ def process_frame(global_idx, frames, grid_cols, lut):
     return grid
 
 
-def run_pipeline(dataset, output_dir, grid_cols, max_frames):
+def run_pipeline(dataset, output_dir, grid_cols, max_frames, vulkan):
     lut = get_palette()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if vulkan:
+        logging.info("Will try to use vulkan")
 
     logging.info("Scanning dataset ...")
     configs = discover_people(dataset)
@@ -354,7 +438,7 @@ def run_pipeline(dataset, output_dir, grid_cols, max_frames):
 
 
     for (global_idx, frames) in frame_iter:
-        grid = process_frame(global_idx, frames, grid_cols, lut)
+        grid = process_frame(global_idx, frames, grid_cols, lut, vulkan)
         if grid is not None:
             frame_path = output_dir.joinpath(f"frame_{global_idx}.png")
             cv2.imwrite(str(frame_path), grid)
@@ -380,6 +464,7 @@ def main():
     parser.add_argument("--output", default=pt.Path("frames"), type=pt.Path, help="Path to output frames")
     parser.add_argument("--cols", type=int, default=0, help="Max cols in one frame (default 0 = best square fit with sqrt(ppl))")
     parser.add_argument("--max-frames", type=int, default=0, help="Max frames to generate (default 0 == ALL)")
+    parser.add_argument("--vulkan", action=argparse.BooleanOptionalAction, default=False, help="Use vulkan to remove noise")
     args = parser.parse_args()
 
     if not args.dataset:
@@ -389,7 +474,8 @@ def main():
         dataset=args.dataset,
         output_dir=args.output,
         grid_cols=args.cols,
-        max_frames=args.max_frames
+        max_frames=args.max_frames,
+        vulkan=args.vulkan,
     )
 
 
