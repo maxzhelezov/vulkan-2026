@@ -108,14 +108,14 @@ def get_palette():
 
     stops = list(reversed([
         # (1,    "#1a1a1a"),
-        (0.90,  "#4e342e"),
-        (0.8, "#6e1e05"),
-        (0.5, "#bc4200"),
-        (0.3,  "#f57c00"),
+        # (1,  "#4e342e"),
+        # (1, "#6e1e05"),
+        (1, "#bc4200"),
+        (0.5,  "#f57c00"),
         (0,  "#f1b000")
     ]))
     cmap = mcolors.LinearSegmentedColormap.from_list(
-        "october", stops, gamma=2
+        "october", stops, gamma=0.8
     )
 
 
