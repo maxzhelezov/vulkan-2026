@@ -107,7 +107,7 @@ def get_palette():
     # )
 
     stops = list(reversed([
-        (1,    "#1a1a1a"),
+        # (1,    "#1a1a1a"),
         (0.90,  "#4e342e"),
         (0.8, "#6e1e05"),
         (0.5, "#bc4200"),
@@ -260,17 +260,23 @@ def remove_noise(crop_mm: np.ndarray, bbox: BBox3D, strength = 1) -> np.ndarray:
         if cnt >= strength:
             break
 
+
     d[d >= bins[len(maxima) - idx - 1]] = 0
 
-
-
-    # lower_part = d[d.shape[0] * 3 // 4:] # second stronger path for feet at 3/4 of frame height
+    # lower_part = np.copy(d[d.shape[0] * 3 // 4:]) # second stronger path for feet at 3/4 of frame height
+    
+    
     # hist, bins = np.histogram(lower_part, bins=100) # 2700 -> 
-
     # maxima = local_maxima(hist) 
     
-    # maxima_idx = len(maxima) - maxima[::-1].argmax()
-    # lower_part[lower_part >= bins[maxima_idx - 1]] = 0
+    # cnt = 0
+    # for idx, val in enumerate(reversed(maxima)):
+    #     if val:
+    #         cnt+= 1
+    #     if cnt >= strength + 1:
+    #         break
+
+    # lower_part[lower_part >= bins[len(maxima) - idx - 1]] = 0
 
     # d[d.shape[0] * 3 // 4:] = lower_part
 
@@ -293,7 +299,10 @@ def colorize(depth_mm, lut):
 
     norm = np.zeros_like(depth_mm)
     norm[valid] = (depth_mm[valid] - d_min) / d_rng
-    idx = (norm * 255.0).clip(0, 255).astype(np.uint8)
+    
+    repeats = 64
+    idx = ((norm * repeats * 255.0) % 256).astype(np.uint8)
+
     out[valid] = lut[idx[valid]]
     return out
 
@@ -338,6 +347,15 @@ def assemble_grid(tiles, labels, n_cols, bg_color = (255, 255, 255), gap = 8):
     label_h = 18
     total_h = n_rows * (cell_h + gap + label_h) + gap
     total_w = n_cols * (cell_w + gap) + gap
+
+    if total_w % 2 == 1:
+        # ffmpeg wants width divisible by 2
+        total_w += 1
+
+    if total_h % 2 == 1:
+        # ffmpeg wants width divisible by 2
+        total_h += 1
+
 
     canvas = np.full((total_h, total_w, 3), bg_color, dtype=np.uint8)
 
@@ -402,15 +420,18 @@ def iter_frames(configs):
         frame_maps.append(fmap)
 
     max_global_idx = max(map(len,frame_maps))
+    last_frame = {}
 
     for global_idx in range(max_global_idx):
         group = []
         for cfg, fmap in zip(configs, frame_maps):
             if global_idx >= len(fmap):
                 # data ended, propogate nothing
-                depth = np.zeros((cfg.intrinsics.height, cfg.intrinsics.width), dtype=np.uint16)
+                #depth = np.zeros((cfg.intrinsics.height, cfg.intrinsics.width), dtype=np.uint16)
+                depth = last_frame[cfg.name]
             else:
                 depth = cv2.imread(str(fmap[global_idx]), cv2.IMREAD_ANYDEPTH)
+                last_frame[cfg.name] = depth
             if depth is None:
                 group.append(None)
                 continue
