@@ -1,0 +1,35 @@
+#version 450
+#extension GL_EXT_shader_atomic_float : enable
+
+layout(local_size_x = 256) in;
+
+// Input: flat float32 depth values (millimetres, 0 = invalid)
+layout(set = 0, binding = 0) readonly buffer DataIn {
+    float data[];
+};
+
+// Output: histogram bins (uint32, atomically incremented)
+layout(set = 0, binding = 1) buffer Histogram {
+    uint bins[];
+};
+
+layout(push_constant) uniform PC {
+    uint  n_elements;   
+
+    float d_min;        
+    float d_max;        
+    uint  n_bins;       
+};
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= n_elements) return;
+
+    float v = data[gid];
+
+    float t = (v - d_min) / (d_max - d_min);
+    if (t < 0.0 || t >= 1.0) return;        // outside depth range
+
+    uint bin = clamp(uint(t * float(n_bins)), 0u, n_bins - 1u);
+    atomicAdd(bins[bin], 1u);
+}

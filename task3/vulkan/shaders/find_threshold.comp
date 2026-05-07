@@ -1,0 +1,44 @@
+#version 450
+
+layout(local_size_x = 1) in;   // single-thread: scan is tiny (100 bins)
+
+layout(set = 0, binding = 0) readonly buffer Histogram {
+    uint bins[];
+};
+
+layout(set = 0, binding = 1) buffer ThresholdOut {
+    float threshold;
+};
+
+layout(push_constant) uniform PC {
+    uint  n_bins;           
+    float d_min;
+    float d_max;
+    uint  strength;
+};
+
+void main() {
+    uint found = 0;
+    int selected_peak = 0;
+
+    for (int i = int(n_bins) - 2; i >= 1; i--) {
+
+        uint left  = bins[i - 1];
+        uint mid   = bins[i];
+        uint right = bins[i + 1];
+
+        bool is_peak = (mid > left) && (mid > right);
+
+        if (is_peak) {
+            found++;
+
+            if (found == strength) {
+                selected_peak = i;
+                break;
+            }
+        }
+    }
+
+    float threshold_val = d_min + (float(selected_peak - 1) / float(n_bins)) * (d_max - d_min);
+    threshold = threshold_val;
+}

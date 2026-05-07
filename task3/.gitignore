@@ -1,0 +1,7 @@
+task1
+dataset/
+frames/
+*.mp4
+ds_2
+uv.lock
+Colorizer
