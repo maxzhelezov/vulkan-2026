@@ -14,11 +14,11 @@ layout(set = 0, binding = 1) buffer Histogram {
 };
 
 layout(push_constant) uniform PC {
-    uint  n_elements;   // total number of pixels in the crop
+    uint  n_elements;   
 
-    float d_min;        // minimum valid depth to histogram
-    float d_max;        // maximum valid depth to histogram
-    uint  n_bins;       // number of histogram bins (100)
+    float d_min;        
+    float d_max;        
+    uint  n_bins;       
 };
 
 void main() {

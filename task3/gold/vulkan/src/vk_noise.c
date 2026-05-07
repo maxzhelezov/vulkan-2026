@@ -383,6 +383,13 @@ vk_noise_ctx_t *vk_noise_create(const char *spv_dir)
                       &ctx->buf_hist, &ctx->mem_hist));
 
     VKC(create_buffer(ctx,
+                      N_BINS * sizeof(uint32_t),
+                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      &ctx->buf_hist, &ctx->mem_hist));
+
+    VKC(create_buffer(ctx,
                       sizeof(float),
                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -454,7 +461,7 @@ static void record_one_pass(vk_noise_ctx_t *ctx,
                              uint32_t n_elements,   /* pixels in region    */
                              float    d_min,
                              float    d_max,
-                             uint32_t tail_bins,
+                             uint32_t strength,
                              VkDescriptorSet dset_hist,
                              VkDescriptorSet dset_thresh,
                              VkDescriptorSet dset_apply)
@@ -488,7 +495,7 @@ static void record_one_pass(vk_noise_ctx_t *ctx,
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ctx->pipe_thresh.pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             ctx->pipe_thresh.pipe_layout, 0, 1, &dset_thresh, 0, NULL);
-    PC_Thresh pc_thresh = { N_BINS, d_min, d_max, tail_bins };
+    PC_Thresh pc_thresh = { N_BINS, d_min, d_max, strength };
     vkCmdPushConstants(cmd, ctx->pipe_thresh.pipe_layout,
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_thresh), &pc_thresh);
     vkCmdDispatch(cmd, 1, 1, 1);
@@ -662,9 +669,6 @@ int vk_noise_remove(vk_noise_ctx_t *ctx,
 }
 
 
-/* ══════════════════════════════════════════════════════════════════════════
- *  Public API: vk_noise_last_error / vk_noise_destroy
- * ══════════════════════════════════════════════════════════════════════════ */
 
 const char *vk_noise_last_error(vk_noise_ctx_t *ctx)
 {

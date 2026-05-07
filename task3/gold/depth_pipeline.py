@@ -67,11 +67,8 @@ class VkNoiseRemover:
 
         return crop_mm
 
-    def remove(self, crop_mm, bbox):
-        crop_mm = self.remove_raw(crop_mm, 4)
-        lower_part = crop_mm[crop_mm.shape[0] * 3 // 4:] # second stronger path for feet at 3/4 of frame height
-        crop_mm[crop_mm.shape[0] * 3 // 4:] = self.remove_raw(lower_part, 55)
-        return crop_mm
+    def remove(self, crop_mm, bbox, strength):
+        return self.remove_raw(crop_mm, strength)
 
     def __del__(self):
         if hasattr(self, "_lib") and hasattr(self, "_ctx"):
@@ -81,13 +78,13 @@ class VkNoiseRemover:
 
 
 _default_remover = None
-def remove_noise_vulkan(crop_mm, bbox):
+def remove_noise_vulkan(crop_mm, bbox, strength):
     global _default_remover
 
     if _default_remover is None:
         _default_remover = VkNoiseRemover()
 
-    return _default_remover.remove(crop_mm, bbox)
+    return _default_remover.remove(crop_mm, bbox, strength)
 
 
 def get_palette():
@@ -109,9 +106,16 @@ def get_palette():
     #     "abyss_thermal", [(pos, rgb) for pos, rgb in stops]
     # )
 
-    stops = list(reversed(["#1a1a1a", "#4e342e", "#6e1e05", "#bc4200", "#f57c00", "#f1b000"]))
+    stops = list(reversed([
+        (1,    "#1a1a1a"),
+        (0.90,  "#4e342e"),
+        (0.8, "#6e1e05"),
+        (0.5, "#bc4200"),
+        (0.3,  "#f57c00"),
+        (0,  "#f1b000")
+    ]))
     cmap = mcolors.LinearSegmentedColormap.from_list(
-        "october", stops, gamma=1.4
+        "october", stops, gamma=2
     )
 
 
@@ -237,15 +241,38 @@ def project_bbox3d(bbox: BBox3D, K: Intrinsics):
     return u1, v1, u2, v2
 
 
-def remove_noise(crop_mm: np.ndarray, bbox: BBox3D) -> np.ndarray:
+def local_maxima(a):
+    return np.r_[True, a[1:] > a[:-1]] & np.r_[a[:-1] > a[1:], True]
+
+def remove_noise(crop_mm: np.ndarray, bbox: BBox3D, strength = 1) -> np.ndarray:
     d = crop_mm.astype(np.float32)
 
-    hist, bins = np.histogram(d, bins=100) # 2700 -> 
-    d[d > bins[len(bins) - 4]] = 0
+    if strength == 0:
+        return d
 
-    lower_part = d[d.shape[0] * 3 // 4:] # second stronger path for feet at 3/4 of frame height
-    hist, bins = np.histogram(lower_part, bins=100) # 2700 -> 
-    lower_part[lower_part > bins[len(bins) - 20]] = 0
+    hist, bins = np.histogram(d, bins=100) # 2700 -> 
+
+    maxima = local_maxima(hist)
+    cnt = 0
+    for idx, val in enumerate(reversed(maxima)):
+        if val:
+            cnt+= 1
+        if cnt >= strength:
+            break
+
+    d[d >= bins[len(maxima) - idx - 1]] = 0
+
+
+
+    # lower_part = d[d.shape[0] * 3 // 4:] # second stronger path for feet at 3/4 of frame height
+    # hist, bins = np.histogram(lower_part, bins=100) # 2700 -> 
+
+    # maxima = local_maxima(hist) 
+    
+    # maxima_idx = len(maxima) - maxima[::-1].argmax()
+    # lower_part[lower_part >= bins[maxima_idx - 1]] = 0
+
+    # d[d.shape[0] * 3 // 4:] = lower_part
 
     return d
 
@@ -272,7 +299,7 @@ def colorize(depth_mm, lut):
 
 
 
-def make_tile(depth_raw, cfg, lut, vulkan):
+def make_tile(depth_raw, cfg, lut, vulkan, strength):
     """
     uint16 depth map + PersonConfig → BGR tile.
     Возвращает None если crop пустой или весь фон.
@@ -280,16 +307,13 @@ def make_tile(depth_raw, cfg, lut, vulkan):
     u1, v1, u2, v2 = project_bbox3d(cfg.bbox3d, cfg.intrinsics)
     crop = depth_raw.astype(np.float32)[v1:v2, u1:u2]
 
-    if crop.size == 0 or float(crop.max()) == 0:
+    if crop.size == 0:
         return None
 
     if vulkan:
-        denoised = remove_noise_vulkan(crop, cfg.bbox3d)
+        denoised = remove_noise_vulkan(crop, cfg.bbox3d, strength)
     else:
-        denoised = remove_noise(crop, cfg.bbox3d)
-
-    if float(denoised.max()) == 0:
-        return None
+        denoised = remove_noise(crop, cfg.bbox3d, strength)
 
     return colorize(denoised, lut)
 
@@ -384,7 +408,7 @@ def iter_frames(configs):
         for cfg, fmap in zip(configs, frame_maps):
             if global_idx >= len(fmap):
                 # data ended, propogate nothing
-                depth = np.zeros((cfg.intrinsics.height, cfg.intrinsics.width, 3), dtype=np.uint16)
+                depth = np.zeros((cfg.intrinsics.height, cfg.intrinsics.width), dtype=np.uint16)
             else:
                 depth = cv2.imread(str(fmap[global_idx]), cv2.IMREAD_ANYDEPTH)
             if depth is None:
@@ -397,10 +421,10 @@ def iter_frames(configs):
         if group:
             yield global_idx, group
 
-def process_frame(global_idx, frames, grid_cols, lut, vulkan):
+def process_frame(global_idx, frames, grid_cols, lut, vulkan, strength):
     tiles, labels = [], []
     for cfg, depth_raw in frames:
-        tile = make_tile(depth_raw, cfg, lut, vulkan)
+        tile = make_tile(depth_raw, cfg, lut, vulkan, strength)
 
         if tile is not None:
             tiles.append(tile)
@@ -412,7 +436,7 @@ def process_frame(global_idx, frames, grid_cols, lut, vulkan):
     return grid
 
 
-def run_pipeline(dataset, output_dir, grid_cols, max_frames, vulkan):
+def run_pipeline(dataset, output_dir, grid_cols, max_frames, vulkan, strength):
     lut = get_palette()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -438,7 +462,7 @@ def run_pipeline(dataset, output_dir, grid_cols, max_frames, vulkan):
 
 
     for (global_idx, frames) in frame_iter:
-        grid = process_frame(global_idx, frames, grid_cols, lut, vulkan)
+        grid = process_frame(global_idx, frames, grid_cols, lut, vulkan, strength)
         if grid is not None:
             frame_path = output_dir.joinpath(f"frame_{global_idx}.png")
             cv2.imwrite(str(frame_path), grid)
@@ -465,6 +489,7 @@ def main():
     parser.add_argument("--cols", type=int, default=0, help="Max cols in one frame (default 0 = best square fit with sqrt(ppl))")
     parser.add_argument("--max-frames", type=int, default=0, help="Max frames to generate (default 0 == ALL)")
     parser.add_argument("--vulkan", action=argparse.BooleanOptionalAction, default=False, help="Use vulkan to remove noise")
+    parser.add_argument("--strength", type=int, default=1, help="Denoiser strength")
     args = parser.parse_args()
 
     if not args.dataset:
@@ -476,6 +501,7 @@ def main():
         grid_cols=args.cols,
         max_frames=args.max_frames,
         vulkan=args.vulkan,
+        strength=args.strength
     )
 
 

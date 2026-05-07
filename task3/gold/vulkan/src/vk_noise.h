@@ -22,3 +22,7 @@ const char *vk_noise_last_error(vk_noise_ctx_t *ctx);
 
 /* Free all Vulkan resources. */
 void vk_noise_destroy(vk_noise_ctx_t *ctx);
+
+#ifdef __cplusplus
+}
+#endif

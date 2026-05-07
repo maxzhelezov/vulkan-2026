@@ -2,7 +2,6 @@
 
 layout(local_size_x = 256) in;
 
-// In-place: data is both read and written
 layout(set = 0, binding = 0) buffer Data {
     float data[];
 };
@@ -21,5 +20,5 @@ void main() {
 
     uint idx = gid;
     float v = data[idx];
-    if (v > threshold) data[idx] = 0.0;
+    if (v >= threshold) data[idx] = 0.0;
 }
