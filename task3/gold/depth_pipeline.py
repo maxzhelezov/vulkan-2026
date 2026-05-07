@@ -32,7 +32,7 @@ def get_palette():
 
     stops = list(reversed(["#1a1a1a", "#4e342e", "#6e1e05", "#bc4200", "#f57c00", "#f1b000"]))
     cmap = mcolors.LinearSegmentedColormap.from_list(
-        "october", stops, gamma=0.7
+        "october", stops, gamma=1.4
     )
 
 
@@ -180,8 +180,8 @@ def colorize(depth_mm: np.ndarray, lut: np.ndarray) -> np.ndarray:
     if not valid.any():
         return out
 
-    d_min = float(depth_mm[valid].min())
-    d_rng = float(depth_mm[valid].max()) - d_min
+    d_min = 0
+    d_rng = 2700
     if d_rng < 1e-3:
         d_rng = 1.0
 
@@ -301,12 +301,16 @@ def iter_frames(configs):
         group = []
         for cfg, fmap in zip(configs, frame_maps):
             if global_idx >= len(fmap):
-                group.append(None)
-            depth = cv2.imread(str(fmap[global_idx]), cv2.IMREAD_ANYDEPTH)
+                # data ended, propogate nothing
+                depth = np.zeros((cfg.intrinsics.height, cfg.intrinsics.width, 3), dtype=np.uint16)
+            else:
+                depth = cv2.imread(str(fmap[global_idx]), cv2.IMREAD_ANYDEPTH)
             if depth is None:
                 group.append(None)
+                continue
             if depth.dtype != np.uint16:
                 group.append(None)
+                continue
             group.append((cfg, depth))
         if group:
             yield global_idx, group
@@ -315,6 +319,7 @@ def process_frame(global_idx, frames, grid_cols, lut):
     tiles, labels = [], []
     for cfg, depth_raw in frames:
         tile = make_tile(depth_raw, cfg, lut)
+
         if tile is not None:
             tiles.append(tile)
             labels.append(cfg.name)
@@ -351,12 +356,12 @@ def run_pipeline(dataset, output_dir, grid_cols, max_frames):
     for (global_idx, frames) in frame_iter:
         grid = process_frame(global_idx, frames, grid_cols, lut)
         if grid is not None:
-            frame_path = output_dir.joinpath(f"frame_{global_idx:05d}.png")
+            frame_path = output_dir.joinpath(f"frame_{global_idx}.png")
             cv2.imwrite(str(frame_path), grid)
             saved += 1
             if global_idx % 20 == 0:
                 h, w = grid.shape[:2]
-                logging.info(f"Proccesed frame_{global_idx:05d}.png")
+                logging.info(f"Proccesed frame_{global_idx}.png")
 
     logging.info(f"Done. Saved {saved} frames to {output_dir.resolve()}")
 
